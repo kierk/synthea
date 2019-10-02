@@ -90,7 +90,7 @@ public class Generator {
     public String state;
     public List<String> enabledModules;
   }
-  
+
   /**
    * Create a Generator, using all default settings.
    */
@@ -101,7 +101,7 @@ public class Generator {
   /**
    * Create a Generator, with the given population size.
    * All other settings are left as defaults.
-   * 
+   *
    * @param population Target population size
    */
   public Generator(int population) {
@@ -109,11 +109,11 @@ public class Generator {
     options.population = population;
     init(options);
   }
-  
+
   /**
    * Create a Generator, with the given population size and seed.
    * All other settings are left as defaults.
-   * 
+   *
    * @param population Target population size
    * @param seed Seed used for randomness
    */
@@ -185,9 +185,9 @@ public class Generator {
     Provider.loadProviders(location);
     // ensure modules load early
     List<String> coreModuleNames = getModuleNames(Module.getModules(path -> false));
-    List<String> moduleNames = getModuleNames(Module.getModules(modulePredicate)); 
+    List<String> moduleNames = getModuleNames(Module.getModules(modulePredicate));
     Costs.loadCostData(); // ensure cost data loads early
-    
+
     String locationName;
     if (o.city == null) {
       locationName = o.state;
@@ -220,7 +220,7 @@ public class Generator {
             .map(m -> m.name)
             .collect(Collectors.toList());
   }
-  
+
   /**
    * Generate the population, using the currently set configuration settings.
    */
@@ -256,13 +256,13 @@ public class Generator {
       metrics.printStats(totalGeneratedPopulation.get(), Module.getModules(getModulePredicate()));
     }
   }
-  
+
   /**
    * Generate a completely random Person. The returned person will be alive at the end of the
    * simulation. This means that if in the course of the simulation the person dies, a new person
-   * will be started to replace them. 
+   * will be started to replace them.
    * The seed used to generate the person is randomized as well.
-   * 
+   *
    * @param index Target index in the whole set of people to generate
    * @return generated Person
    */
@@ -278,7 +278,7 @@ public class Generator {
    * person will be started to replace them. Note also that if the person dies, the seed to produce
    * them can't be re-used (otherwise the new person would die as well) so a new seed is picked,
    * based on the given seed.
-   * 
+   *
    * @param index
    *          Target index in the whole set of people to generate
    * @param personSeed
@@ -292,9 +292,11 @@ public class Generator {
       int tryNumber = 0; // number of tries to create these demographics
       Random randomForDemographics = new Random(personSeed);
       Demographics city = location.randomCity(randomForDemographics);
-      
-      Map<String, Object> demoAttributes = pickDemographics(randomForDemographics, city);
+
+      Map<String, Object> demoAttributes = pickDemographics(randomForDemographics, city, index);
       long start = (long) demoAttributes.get(Person.BIRTHDATE);
+      int providerMinimum = Integer.parseInt(Config.get("generate.providers.minimum", "1"));
+      int providerCount = 0;
 
       do {
         List<Module> modules = Module.getModules(modulePredicate);
@@ -306,7 +308,6 @@ public class Generator {
 
         LifecycleModule.birth(person, start);
         EncounterModule encounterModule = new EncounterModule();
-
         long time = start;
         while (person.alive(time) && time < stop) {
           encounterModule.process(person, time);
@@ -343,7 +344,7 @@ public class Generator {
         if (internalStore != null) {
           internalStore.add(person);
         }
-        
+
         if (this.metrics != null) {
           metrics.recordStats(person, time, Module.getModules(modulePredicate));
         }
@@ -354,16 +355,18 @@ public class Generator {
 
         String key = isAlive ? "alive" : "dead";
 
+        providerCount = person.providerCount();
+
         AtomicInteger count = stats.get(key);
         count.incrementAndGet();
 
         totalGeneratedPopulation.incrementAndGet();
-        
+
         tryNumber++;
         if (!isAlive) {
           // rotate the seed so the next attempt gets a consistent but different one
           personSeed = new Random(personSeed).nextLong();
-          
+
           // if we've tried and failed > 10 times to generate someone over age 90
           // and the options allow for ages as low as 85
           // reduce the age to increase the likelihood of success
@@ -384,13 +387,14 @@ public class Generator {
         // this means export must be the LAST THING done with the person
         Exporter.export(person, time);
       } while ((!isAlive && !onlyDeadPatients && this.options.overflow)
-          || (isAlive && onlyDeadPatients));
+          || (isAlive && onlyDeadPatients) || (providerCount < providerMinimum));
       // if the patient is alive and we want only dead ones => loop & try again
       //  (and dont even export, see above)
       // if the patient is dead and we only want dead ones => done
       // if the patient is dead and we want live ones => loop & try again
       //  (but do export the record anyway)
       // if the patient is alive and we want live ones => done
+      // if the provider count is less than the target provider minimym => loop & try again
     } catch (Throwable e) {
       // lots of fhir things throw errors for some reason
       e.printStackTrace();
@@ -400,7 +404,7 @@ public class Generator {
   }
 
   private synchronized void writeToConsole(Person person, int index, long time, boolean isAlive) {
-    // this is synchronized to ensure all lines for a single person are always printed 
+    // this is synchronized to ensure all lines for a single person are always printed
     // consecutively
     String deceased = isAlive ? "" : "DECEASED";
     System.out.format("%d -- %s (%d y/o %s) %s, %s %s\n", index + 1,
@@ -425,11 +429,11 @@ public class Generator {
     }
   }
 
-  private Map<String, Object> pickDemographics(Random random, Demographics city) {
+  private Map<String, Object> pickDemographics(Random random, Demographics city, int index) {
     Map<String, Object> out = new HashMap<>();
     out.put(Person.CITY, city.city);
     out.put(Person.STATE, city.state);
-    
+
     String race = city.pickRace(random);
     out.put(Person.RACE, race);
     String ethnicity = city.ethnicityFromRace(race, random);
@@ -441,7 +445,7 @@ public class Generator {
     if (options.gender != null) {
       gender = options.gender;
     } else {
-      gender = city.pickGender(random);
+      gender = city.pickGender(random, index);
       if (gender.equalsIgnoreCase("male") || gender.equalsIgnoreCase("M")) {
         gender = "M";
       } else {
@@ -474,7 +478,7 @@ public class Generator {
 
     int targetAge;
     if (options.ageSpecified) {
-      targetAge = 
+      targetAge =
           (int) (options.minAge + ((options.maxAge - options.minAge) * random.nextDouble()));
     } else {
       targetAge = city.pickAge(random);
@@ -483,22 +487,22 @@ public class Generator {
 
     long birthdate = birthdateFromTargetAge(targetAge, random);
     out.put(Person.BIRTHDATE, birthdate);
-    
+
     return out;
   }
-  
+
   private long birthdateFromTargetAge(long targetAge, Random random) {
     long earliestBirthdate = stop - TimeUnit.DAYS.toMillis((targetAge + 1) * 365L + 1);
     long latestBirthdate = stop - TimeUnit.DAYS.toMillis(targetAge * 365L);
-    return 
+    return
         (long) (earliestBirthdate + ((latestBirthdate - earliestBirthdate) * random.nextDouble()));
   }
-  
+
   private Predicate<String> getModulePredicate() {
     if (options.enabledModules == null) {
       return path -> true;
     }
-    FilenameFilter filenameFilter = new WildcardFileFilter(options.enabledModules, 
+    FilenameFilter filenameFilter = new WildcardFileFilter(options.enabledModules,
         IOCase.INSENSITIVE);
     return path -> filenameFilter.accept(null, path);
   }

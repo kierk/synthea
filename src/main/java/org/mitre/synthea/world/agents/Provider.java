@@ -164,7 +164,7 @@ public class Provider implements QuadTreeData {
       return null;
     }
   }
-  
+
   /**
    * Will this provider accept the given person as a patient at the given time?.
    * @param person Person to consider
@@ -239,7 +239,7 @@ public class Provider implements QuadTreeData {
   private static QuadTree generateQuadTree() {
     return new QuadTree(7500, 25); // capacity, depth
   }
-  
+
   /**
    * Load into cache the list of providers for a state.
    * @param location the state being loaded.
@@ -253,7 +253,7 @@ public class Provider implements QuadTreeData {
         servicesProvided.add(EncounterType.AMBULATORY);
         servicesProvided.add(EncounterType.OUTPATIENT);
         servicesProvided.add(EncounterType.INPATIENT);
-      
+
         String hospitalFile = Config.get("generate.providers.hospitals.default_file");
         loadProviders(location, hospitalFile, servicesProvided);
 
@@ -264,12 +264,12 @@ public class Provider implements QuadTreeData {
         servicesProvided.add(EncounterType.WELLNESS);
         String primaryCareFile = Config.get("generate.providers.primarycare.default_file");
         loadProviders(location, primaryCareFile, servicesProvided);
-        
+
         servicesProvided.clear();
         servicesProvided.add(EncounterType.URGENTCARE);
         String urgentcareFile = Config.get("generate.providers.urgentcare.default_file");
         loadProviders(location, urgentcareFile, servicesProvided);
-      
+
         statesLoaded.add(location.state);
         statesLoaded.add(Location.getAbbreviation(location.state));
         statesLoaded.add(Location.getStateName(location.state));
@@ -283,7 +283,7 @@ public class Provider implements QuadTreeData {
   /**
    * Read the providers from the given resource file, only importing the ones for the given state.
    * THIS method is for loading providers and generating clinicians with specific specialties
-   * 
+   *
    * @param location the state being loaded
    * @param filename Location of the file, relative to src/main/resources
    * @param servicesProvided Set of services provided by these facilities
@@ -294,7 +294,7 @@ public class Provider implements QuadTreeData {
       throws IOException {
     String resource = Utilities.readResource(filename);
     Iterator<? extends Map<String,String>> csv = SimpleCSV.parseLineByLine(resource);
-    
+
     while (csv.hasNext()) {
       Map<String,String> row = csv.next();
       String currState = row.get("state");
@@ -304,7 +304,7 @@ public class Provider implements QuadTreeData {
       if ((location.state == null)
           || (location.state != null && location.state.equalsIgnoreCase(currState))
           || (abbreviation != null && abbreviation.equalsIgnoreCase(currState))) {
-    
+
         Provider parsed = csvLineToProvider(row);
         parsed.servicesProvided.addAll(servicesProvided);
 
@@ -324,19 +324,19 @@ public class Provider implements QuadTreeData {
 
         if (row.get("hasSpecialties") == null
             || row.get("hasSpecialties").equalsIgnoreCase("false")) {
-          parsed.clinicianMap.put(ClinicianSpecialty.GENERAL_PRACTICE, 
+          parsed.clinicianMap.put(ClinicianSpecialty.GENERAL_PRACTICE,
               parsed.generateClinicianList(1, ClinicianSpecialty.GENERAL_PRACTICE));
         } else {
-          for (String specialty : ClinicianSpecialty.getSpecialties()) { 
+          for (String specialty : ClinicianSpecialty.getSpecialties()) {
             String specialtyCount = row.get(specialty);
-            if (specialtyCount != null && !specialtyCount.trim().equals("") 
+            if (specialtyCount != null && !specialtyCount.trim().equals("")
                 && !specialtyCount.trim().equals("0")) {
-              parsed.clinicianMap.put(specialty, 
+              parsed.clinicianMap.put(specialty,
                   parsed.generateClinicianList(Integer.parseInt(row.get(specialty)), specialty));
             }
           }
           if (row.get(ClinicianSpecialty.GENERAL_PRACTICE).equals("0")) {
-            parsed.clinicianMap.put(ClinicianSpecialty.GENERAL_PRACTICE, 
+            parsed.clinicianMap.put(ClinicianSpecialty.GENERAL_PRACTICE,
                 parsed.generateClinicianList(1, ClinicianSpecialty.GENERAL_PRACTICE));
           }
         }
@@ -390,7 +390,8 @@ public class Provider implements QuadTreeData {
       out.put(Person.ETHNICITY, ethnicity);
       String language = city.languageFromEthnicity(ethnicity, randomForDemographics);
       out.put(Person.FIRST_LANGUAGE, language);
-      String gender = city.pickGender(randomForDemographics);
+      // TODO: Remove the second arg when the file detection is fixed
+      String gender = city.pickGender(randomForDemographics, 1);
       if (gender.equalsIgnoreCase("male") || gender.equalsIgnoreCase("M")) {
         gender = "M";
       } else {
@@ -437,7 +438,7 @@ public class Provider implements QuadTreeData {
     doc.incrementEncounters();
     return doc;
   }
-  
+
   /**
    * Given a line of parsed CSV input, convert the data into a Provider.
    * @param line - read a csv line to a provider's attributes
