@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.math3.special.Erf;
+import org.hl7.fhir.r4.model.Patient;
 import org.mitre.synthea.engine.Event;
 import org.mitre.synthea.engine.Module;
 import org.mitre.synthea.helpers.Attributes;
@@ -42,11 +43,11 @@ public final class LifecycleModule extends Module {
 
   public static final boolean appendNumbersToNames =
       Boolean.parseBoolean(Config.get("generate.append_numbers_to_person_names", "false"));
-  
+
   private static RandomCollection<String> sexualOrientationData = loadSexualOrientationData();
 
   private static SimpleYML names = loadNames();
-  
+
   public LifecycleModule() {
     this.name = "Lifecycle";
   }
@@ -64,7 +65,7 @@ public final class LifecycleModule extends Module {
       throw new ExceptionInInitializerError(e);
     }
   }
-  
+
   private static SimpleYML loadNames() {
     String filename = "names.yml";
     try {
@@ -76,10 +77,10 @@ public final class LifecycleModule extends Module {
       throw new ExceptionInInitializerError(e);
     }
   }
-  
+
   private static RandomCollection<String> loadSexualOrientationData() {
     RandomCollection<String> soDistribution = new RandomCollection<String>();
-    double[] soPercentages = BiometricsConfig.doubles("lifecycle.sexual_orientation"); 
+    double[] soPercentages = BiometricsConfig.doubles("lifecycle.sexual_orientation");
     // [heterosexual, homosexual, bisexual]
     soDistribution.add(soPercentages[0], "heterosexual");
     soDistribution.add(soPercentages[1], "homosexual");
@@ -115,7 +116,7 @@ public final class LifecycleModule extends Module {
    * @param person The baby.
    * @param time The time of birth.
    */
-  public static void birth(Person person, long time) {
+  public static void birth(Person person, long time, int index) {
     Map<String, Object> attributes = person.attributes;
 
     attributes.put(Person.ID, UUID.randomUUID().toString());
@@ -123,8 +124,8 @@ public final class LifecycleModule extends Module {
     person.events.create(time, Event.BIRTH, "Generator.run", true);
     String gender = (String) attributes.get(Person.GENDER);
     String language = (String) attributes.get(Person.FIRST_LANGUAGE);
-    String firstName = fakeFirstName(gender, language, person.random);
-    String lastName = fakeLastName(language, person.random);
+    String firstName = patientFirstName(gender, language, person.random, index);
+    String lastName = patientLastName(language, person.random, index);
     if (appendNumbersToNames) {
       firstName = addHash(firstName);
       lastName = addHash(lastName);
@@ -140,7 +141,7 @@ public final class LifecycleModule extends Module {
       motherLastName = addHash(motherLastName);
     }
     attributes.put(Person.NAME_MOTHER, motherFirstName + " " + motherLastName);
-    
+
     String fatherFirstName = fakeFirstName("M", language, person.random);
     if (appendNumbersToNames) {
       fatherFirstName = addHash(fatherFirstName);
@@ -148,15 +149,29 @@ public final class LifecycleModule extends Module {
     // this is anglocentric where the baby gets the father's last name
     attributes.put(Person.NAME_FATHER, fatherFirstName + " " + lastName);
 
-    double prevalenceOfTwins = 
+    double prevalenceOfTwins =
         (double) BiometricsConfig.get("lifecycle.prevalence_of_twins", 0.02);
     if ((person.rand() < prevalenceOfTwins)) {
       attributes.put(Person.MULTIPLE_BIRTH_STATUS, person.randInt(3) + 1);
     }
 
-    String phoneNumber = "555-" + ((person.randInt(999 - 100 + 1) + 100)) + "-"
-        + ((person.randInt(9999 - 1000 + 1) + 1000));
-    attributes.put(Person.TELECOM, phoneNumber);
+    Patient newPatient = Utilities.loadPatient(index);
+    if (newPatient != null) {
+      attributes.put(Person.TELECOM, newPatient.getTelecom().get(0).getValue());
+      if (newPatient.getIdentifier().get(0).getValue() != null && newPatient.getIdentifier().get(0).getType().getCoding().get(0).getCode() != null) {
+        attributes.put(Person.IDENTIFIER_RECORD_ID, newPatient.getIdentifier().get(0).getValue());
+        attributes.put(Person.IDENTIFIER_SITE, newPatient.getIdentifier().get(0).getType().getCoding().get(0).getCode());
+      }
+      if (newPatient.getContact().get(0).getName().getFamily() != null && newPatient.getContact().get(0).getTelecom().get(0).getValue() != null && newPatient.getContact().get(0).getName().getGiven().get(0) != null) {
+        attributes.put(Person.CONTACT_GIVEN_NAME, newPatient.getContact().get(0).getName().getGiven().get(0).toString());
+        attributes.put(Person.CONTACT_FAMILY_NAME, newPatient.getContact().get(0).getName().getFamily());
+        attributes.put(Person.CONTACT_EMAIL, newPatient.getContact().get(0).getTelecom().get(0).getValue());
+      }
+    } else {
+      String phoneNumber = "555-" + ((person.randInt(999 - 100 + 1) + 100)) + "-"
+          + ((person.randInt(9999 - 1000 + 1) + 1000));
+      attributes.put(Person.TELECOM, phoneNumber);
+    }
 
     String ssn = "999-" + ((person.randInt(99 - 10 + 1) + 10)) + "-"
         + ((person.randInt(9999 - 1000 + 1) + 1000));
@@ -181,9 +196,9 @@ public final class LifecycleModule extends Module {
       // For CSV exports so we don't break any existing schemas
       attributes.put(Person.BIRTHPLACE, birthPlace[3]);
     }
-    
+
     boolean hasStreetAddress2 = person.rand() < 0.5;
-    attributes.put(Person.ADDRESS, fakeAddress(hasStreetAddress2, person.random));
+    attributes.put(Person.ADDRESS, patientAddress(hasStreetAddress2, person.random, index));
 
     attributes.put(Person.ACTIVE_WEIGHT_MANAGEMENT, false);
     // TODO: Why are the percentiles a vital sign? Sounds more like an attribute?
@@ -255,7 +270,7 @@ public final class LifecycleModule extends Module {
     // pick a random item from the list
     return choices.get(random.nextInt(choices.size()));
   }
-  
+
   /**
    * Generate a surname appropriate for a given language.
    * @param language Origin language of the name, "english", "spanish"
@@ -274,6 +289,30 @@ public final class LifecycleModule extends Module {
     return choices.get(random.nextInt(choices.size()));
   }
 
+  public static String patientFirstName(String gender, String language, Random random, int index) {
+    Patient newPatient = Utilities.loadPatient(index);
+    if (newPatient != null) {
+      return newPatient.getName().get(0).getGiven().get(0).toString();
+    }
+    return fakeFirstName(gender, language, random);
+  }
+
+  public static String patientLastName(String language, Random random, int index) {
+    Patient newPatient = Utilities.loadPatient(index);
+    if (newPatient != null) {
+      return newPatient.getName().get(0).getFamily();
+    }
+    return fakeLastName(language, random);
+  }
+
+  public static String patientAddress(boolean includeLine2, Random random, int index) {
+    Patient newPatient = Utilities.loadPatient(index);
+    if (newPatient != null) {
+      return newPatient.getAddress().get(0).getLine().get(0).toString();
+    }
+    return fakeAddress(includeLine2, random);
+  }
+
   /**
    * Generate a Street Address.
    * @param includeLine2 Whether or not the address should have a second line,
@@ -285,12 +324,12 @@ public final class LifecycleModule extends Module {
   public static String fakeAddress(boolean includeLine2, Random random) {
     int number = random.nextInt(1000) + 100;
     List<String> n = (List<String>)names.get("english.family");
-    // for now just use family names as the street name. 
+    // for now just use family names as the street name.
     // could expand with a few more but probably not worth it
     String streetName = n.get(random.nextInt(n.size()));
     List<String> a = (List<String>)names.get("street.type");
     String streetType = a.get(random.nextInt(a.size()));
-    
+
     if (includeLine2) {
       int addtlNum = random.nextInt(100);
       List<String> s = (List<String>)names.get("street.secondary");
@@ -300,7 +339,7 @@ public final class LifecycleModule extends Module {
       return number + " " + streetName + " " + streetType;
     }
   }
-  
+
   /**
    * Adds a 1- to 3-digit hashcode to the end of the name.
    * @param name Person's name
@@ -319,7 +358,7 @@ public final class LifecycleModule extends Module {
 
   /**
    * Age the patient.
-   * 
+   *
    * @return whether or not the patient should grow
    */
   private static boolean age(Person person, long time) {
@@ -407,17 +446,17 @@ public final class LifecycleModule extends Module {
     }
     return shouldGrow;
   }
-  
-  private static final int ADULT_MAX_WEIGHT_AGE = 
+
+  private static final int ADULT_MAX_WEIGHT_AGE =
       (int) BiometricsConfig.get("lifecycle.adult_max_weight_age", 49);
-  
-  private static final int GERIATRIC_WEIGHT_LOSS_AGE = 
+
+  private static final int GERIATRIC_WEIGHT_LOSS_AGE =
       (int) BiometricsConfig.get("lifecycle.geriatric_weight_loss_age", 60);
-  
+
   private static final double[] ADULT_WEIGHT_GAIN_RANGE =
       BiometricsConfig.doubles("lifecycle.adult_weight_gain");
-  
-  private static final double[] GERIATRIC_WEIGHT_LOSS_RANGE = 
+
+  private static final double[] GERIATRIC_WEIGHT_LOSS_RANGE =
       BiometricsConfig.doubles("lifecycle.geriatric_weight_loss");
 
   private static void grow(Person person, long time) {
@@ -554,19 +593,17 @@ public final class LifecycleModule extends Module {
     impacts.put("1373463", -0.5); // canagliflozin
     impacts.put("106892", -3.0); // basal insulin
     impacts.put("865098", -6.0); // prandial insulin
-    
+
     return impacts;
   }
-  
 
-  
   private static final int[] CHOLESTEROL_RANGE =
       BiometricsConfig.ints("metabolic.lipid_panel.cholesterol");
   private static final int[] TRIGLYCERIDES_RANGE =
       BiometricsConfig.ints("metabolic.lipid_panel.triglycerides");
   private static final int[] HDL_RANGE =
       BiometricsConfig.ints("metabolic.lipid_panel.hdl");
-  
+
   private static final int[] GLUCOSE_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.glucose");
 
@@ -576,44 +613,44 @@ public final class LifecycleModule extends Module {
       BiometricsConfig.doubles("metabolic.basic_panel.normal.calcium");
 
 
-  private static final int[] MILD_KIDNEY_DMG_CC_RANGE = 
+  private static final int[] MILD_KIDNEY_DMG_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.mild_kidney_damage");
-  private static final int[] MODERATE_KIDNEY_DMG_CC_RANGE = 
+  private static final int[] MODERATE_KIDNEY_DMG_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.moderate_kidney_damage");
-  private static final int[] SEVERE_KIDNEY_DMG_CC_RANGE = 
+  private static final int[] SEVERE_KIDNEY_DMG_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.severe_kidney_damage");
-  private static final int[] ESRD_CC_RANGE = 
+  private static final int[] ESRD_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.esrd");
-  private static final int[] NORMAL_FEMALE_CC_RANGE = 
+  private static final int[] NORMAL_FEMALE_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.normal.female");
-  private static final int[] NORMAL_MALE_CC_RANGE = 
+  private static final int[] NORMAL_MALE_CC_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.creatinine_clearance.normal.male");
-  
-  private static final int[] NORMAL_MCR_RANGE = 
+
+  private static final int[] NORMAL_MCR_RANGE =
       BiometricsConfig.ints("metabolic.basic_panel.microalbumin_creatinine_ratio.normal");
-  private static final int[] CONTROLLED_MCR_RANGE = 
+  private static final int[] CONTROLLED_MCR_RANGE =
       BiometricsConfig
       .ints("metabolic.basic_panel.microalbumin_creatinine_ratio.microalbuminuria_controlled");
 
-  private static final int[] UNCONTROLLED_MCR_RANGE = 
+  private static final int[] UNCONTROLLED_MCR_RANGE =
       BiometricsConfig
      .ints("metabolic.basic_panel.microalbumin_creatinine_ratio.microalbuminuria_uncontrolled");
 
-  private static final int[] PROTEINURIA_MCR_RANGE = 
+  private static final int[] PROTEINURIA_MCR_RANGE =
       BiometricsConfig
       .ints("metabolic.basic_panel.microalbumin_creatinine_ratio.proteinuria");
 
-  private static final double[] CHLORIDE_RANGE = 
+  private static final double[] CHLORIDE_RANGE =
       BiometricsConfig.doubles("metabolic.basic_panel.normal.chloride");
-  private static final double[] POTASSIUM_RANGE = 
+  private static final double[] POTASSIUM_RANGE =
       BiometricsConfig.doubles("metabolic.basic_panel.normal.potassium");
-  private static final double[] CO2_RANGE = 
+  private static final double[] CO2_RANGE =
       BiometricsConfig.doubles("metabolic.basic_panel.normal.carbon_dioxide");
-  private static final double[] SODIUM_RANGE = 
+  private static final double[] SODIUM_RANGE =
       BiometricsConfig.doubles("metabolic.basic_panel.normal.sodium");
-  
+
   /**
-   * Calculate this person's vital signs, 
+   * Calculate this person's vital signs,
    * based on their conditions, medications, body composition, etc.
    * @param person The person
    * @param time Current simulation timestamp
@@ -623,25 +660,25 @@ public final class LifecycleModule extends Module {
     if (person.attributes.containsKey("diabetes_severity")) {
       index = (Integer) person.attributes.getOrDefault("diabetes_severity", 1);
     }
-    
+
     double totalCholesterol = person.rand(CHOLESTEROL_RANGE[index], CHOLESTEROL_RANGE[index + 1]);
     double triglycerides = person.rand(TRIGLYCERIDES_RANGE[index], TRIGLYCERIDES_RANGE[index + 1]);
     double hdl = person.rand(HDL_RANGE[index], HDL_RANGE[index + 1]);
     double ldl = totalCholesterol - hdl - (0.2 * triglycerides);
-    
+
     person.setVitalSign(VitalSign.TOTAL_CHOLESTEROL, totalCholesterol);
     person.setVitalSign(VitalSign.TRIGLYCERIDES, triglycerides);
     person.setVitalSign(VitalSign.HDL, hdl);
     person.setVitalSign(VitalSign.LDL, ldl);
-    
+
     double bmi = person.getVitalSign(VitalSign.BMI, time);
     boolean prediabetes = (boolean)person.attributes.getOrDefault("prediabetes", false);
     boolean diabetes = (boolean)person.attributes.getOrDefault("diabetes", false);
     double hbA1c = estimateHbA1c(bmi, prediabetes, diabetes, person);
-    
+
     if (prediabetes || diabetes) {
       // drugs reduce hbA1c.
-      // only do this for people that have pre/diabetes, 
+      // only do this for people that have pre/diabetes,
       // because these drugs are only prescribed if they do
       for (Map.Entry<String, Double> e : DIABETES_DRUG_HBA1C_IMPACTS.entrySet()) {
         String medicationCode = e.getKey();
@@ -654,7 +691,7 @@ public final class LifecycleModule extends Module {
     }
 
     person.setVitalSign(VitalSign.BLOOD_GLUCOSE, hbA1c);
-    
+
     // CKD == stage of "Chronic Kidney Disease" or the level of diabetic kidney damage
     int kidneyDamage = (Integer) person.attributes.getOrDefault("ckd", 0);
     int[] ccRange;
@@ -686,18 +723,18 @@ public final class LifecycleModule extends Module {
     }
     double creatinineClearance = person.rand(ccRange);
     person.setVitalSign(VitalSign.EGFR, creatinineClearance);
-    
+
     double microalbuminCreatinineRatio = person.rand(mcrRange);
     person.setVitalSign(VitalSign.MICROALBUMIN_CREATININE_RATIO, microalbuminCreatinineRatio);
-    
+
     double creatinine = reverseCalculateCreatinine(person, creatinineClearance, time);
     person.setVitalSign(VitalSign.CREATININE, creatinine);
-    
+
     person.setVitalSign(VitalSign.UREA_NITROGEN, person.rand(UREA_NITROGEN_RANGE));
     person.setVitalSign(VitalSign.CALCIUM, person.rand(CALCIUM_RANGE));
-    
+
     index = Math.min(index, 2); // note this continues from the index logic above
-    
+
     double glucose = person.rand(GLUCOSE_RANGE[index], GLUCOSE_RANGE[index + 1]);
     person.setVitalSign(VitalSign.GLUCOSE, glucose);
 
@@ -710,7 +747,7 @@ public final class LifecycleModule extends Module {
   /**
    * Estimate the person's HbA1c using BMI and whether or not they have diabetes or prediabetes as a
    * rough guideline.
-   * 
+   *
    * @param bmi
    *          The person's BMI.
    * @param prediabetes
@@ -765,7 +802,7 @@ public final class LifecycleModule extends Module {
 
   protected static boolean ENABLE_DEATH_BY_NATURAL_CAUSES =
       Boolean.parseBoolean(Config.get("lifecycle.death_by_natural_causes"));
-  
+
   private static final Code NATURAL_CAUSES = new Code("SNOMED-CT", "9855000",
       "Natural death with unknown cause");
 
@@ -980,7 +1017,7 @@ public final class LifecycleModule extends Module {
 
   /**
    * Get all of the Codes this module uses, for inventory purposes.
-   * 
+   *
    * @return Collection of all codes and concepts this module uses
    */
   public static Collection<Code> getAllCodes() {
